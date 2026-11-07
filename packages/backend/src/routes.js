@@ -10,6 +10,7 @@ const fail = (message, status = 400) => Object.assign(new Error(message), { stat
 const required = (value, message) => { if (!value) throw fail(message); return value }
 const requestId = value => { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(value)) throw fail('请求标识无效'); return value }
 const phoneValid = phone => /^1\d{10}$/.test(phone || '')
+const productCategory = value => { if (value == null || value === '') return '未分类'; if (typeof value !== 'string' || !value.trim() || value.trim().length > 40) throw fail('商品分类需为 1 至 40 个字符'); return value.trim() }
 const fingerprint = values => crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
 const sameRequest = (row, expected) => { if (row.request_fingerprint !== expected) throw fail('请求标识已用于其他操作', 409); return row }
 
@@ -149,11 +150,11 @@ export function routes(db, secret) {
   r.post('/admin/products', admin, wrap(async (req, res) => {
     const b = req.body; required(b.name, '请输入商品名称'); const cost = fromCents(toCents(b.cost)), reward = fromCents(toCents(b.reward)); const stock = Number(b.stock)
     if (!Number.isSafeInteger(stock) || stock < 0) throw fail('库存无效')
-    await db.query('INSERT INTO products (name,description,image,cost,reward,stock,options,detail_images) VALUES (?,?,?,?,?,?,?,?)', [b.name, b.description || '', b.image || '', cost, reward, stock, JSON.stringify(b.options || []), JSON.stringify(b.detail_images || [])]); res.json({ ok: true })
+    await db.query('INSERT INTO products (name,category,description,image,cost,reward,stock,options,detail_images) VALUES (?,?,?,?,?,?,?,?,?)', [b.name, productCategory(b.category), b.description || '', b.image || '', cost, reward, stock, JSON.stringify(b.options || []), JSON.stringify(b.detail_images || [])]); res.json({ ok: true })
   }))
   r.put('/admin/products/:id', admin, wrap(async (req, res) => {
     const b = req.body; required(b.name, '请输入商品名称'); const cost = fromCents(toCents(b.cost)), reward = fromCents(toCents(b.reward)); const stock = Number(b.stock); if (!Number.isSafeInteger(stock) || stock < 0) throw fail('库存无效')
-    await db.query('UPDATE products SET name=?,description=?,image=?,cost=?,reward=?,stock=?,active=?,options=?,detail_images=? WHERE id=?', [b.name,b.description || '',b.image || '',cost,reward,stock,b.active ? 1 : 0,JSON.stringify(b.options || []),JSON.stringify(b.detail_images || []),req.params.id]); res.json({ ok: true })
+    await db.query('UPDATE products SET name=?,category=?,description=?,image=?,cost=?,reward=?,stock=?,active=?,options=?,detail_images=? WHERE id=?', [b.name,productCategory(b.category),b.description || '',b.image || '',cost,reward,stock,b.active ? 1 : 0,JSON.stringify(b.options || []),JSON.stringify(b.detail_images || []),req.params.id]); res.json({ ok: true })
   }))
   r.get('/admin/orders', admin, wrap(async (_req, res) => { const [data] = await db.query('SELECT o.*, u.username, u.phone, recipient.username recipient_name FROM orders o JOIN users u ON u.id=o.user_id JOIN users recipient ON recipient.id=o.recipient_id ORDER BY o.id DESC LIMIT 500'); res.json({ data }) }))
   r.put('/admin/orders/:id/notice', admin, wrap(async (req, res) => { const code = String(req.body.pickup_code || '').trim(); if (!code || code.length > 100 || String(req.body.message || '').length > 500) throw fail('提货码或留言无效'); await db.query('UPDATE orders SET pickup_code=?, pickup_message=?, notice_read=0 WHERE id=? AND status <> ?', [code,req.body.message || '',req.params.id,'cancelled']); res.json({ ok: true }) }))

@@ -9,6 +9,7 @@ import { createApp } from '../src/app.js'
 test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致', { skip: process.env.CYM_INTEGRATION !== '1' }, async t => {
   const db = createPool(), suffix = String(Date.now()).slice(-8), firstPhone = `19${suffix}1`, childPhone = `19${suffix}2`, invite = crypto.randomBytes(6).toString('hex').toUpperCase()
   let first, child, product
+  const productName = `测试商品_${suffix}`
   const server = createApp({ db, secret: process.env.JWT_SECRET }).listen(0, '127.0.0.1')
   await new Promise(resolve => server.once('listening', resolve))
   t.after(async () => {
@@ -23,6 +24,7 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
     }
     if (first) await db.query('DELETE FROM users WHERE id=?', [first])
     if (product) await db.query('DELETE FROM products WHERE id=?', [product])
+    else await db.query('DELETE FROM products WHERE name=?', [productName])
     await db.end()
   })
   const call = async (path, body, token, method = 'POST') => {
@@ -34,7 +36,11 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
   const [[found]] = await db.query('SELECT id,parent_id FROM users WHERE phone=?',[childPhone]); child=found.id; assert.equal(found.parent_id,first)
   const admin = await call('/admin/login',{username:process.env.ADMIN_USERNAME || 'admin',password:process.env.ADMIN_PASSWORD})
   const topup={amount:'100.00',request_id:crypto.randomUUID()}; await Promise.all([call(`/admin/users/${child}/topup`,topup,admin.token), call(`/admin/users/${child}/topup`,topup,admin.token)])
-  const [p] = await db.query("INSERT INTO products (name,description,cost,reward,stock) VALUES ('测试商品','',69.80,30.00,2)"); product=p.insertId
+  await call('/admin/products',{name:productName,description:'测试',category:'生活用品',cost:'69.80',reward:'30.00',stock:2},admin.token)
+  const [[p]] = await db.query('SELECT id,category FROM products WHERE name=?',[productName]); product=p.id; assert.equal(p.category,'生活用品')
+  const visible = await call('/products',null,null,'GET'); assert.equal(visible.find(item=>item.id===product)?.category,'生活用品')
+  await call(`/admin/products/${product}`,{name:productName,description:'测试',category:'健康食品',cost:'69.80',reward:'30.00',stock:2,active:true},admin.token,'PUT')
+  const edited = await call('/products',null,null,'GET'); assert.equal(edited.find(item=>item.id===product)?.category,'健康食品')
   await call('/addresses',{contact_name:'测试',contact_phone:childPhone,province:'上海',city:'上海',district:'浦东',detail:'测试地址'},childToken)
   const addresses = await call('/addresses',null,childToken,'GET')
   const payload={product_id:product,address_id:addresses[0].id,request_id:crypto.randomUUID()}
