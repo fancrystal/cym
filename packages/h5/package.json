@@ -1,0 +1,1 @@
+{"name":"@cym/h5","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1 --port 3011","build":"vite build"},"dependencies":{"vue":"3.5.22","qrcode":"1.5.4"},"devDependencies":{"vite":"5.4.21","@vitejs/plugin-vue":"5.2.4"}}
