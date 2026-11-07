@@ -36,6 +36,8 @@ corepack pnpm --filter @cym/admin build
 
 真实 MySQL 联调测试仅对已初始化的本地测试数据库运行：在 `packages/backend` 目录设置 `CYM_INTEGRATION=1` 后运行 `node --test test/integration.test.js`。测试创建并清理临时用户、商品和交易；不要对生产数据库运行。
 
+本地预览可在 `packages/backend` 设置 `CYM_ALLOW_TEST_BOTS=1` 后运行 `node src/seed-test-bots.js`，创建十个四层二叉金字塔测试账户，每个账户带 500 测试产品券。手机号和随机密码只记录在该目录的 `.env`；已有记录时脚本不会重复创建。脚本仅允许连接本机且不能在生产环境运行。
+
 ## 部署规划
 
 H5 使用 `cym.green`，后台使用 `admin.cym.green`，分别由独立 Nginx 站点提供静态文件并同源代理 `/api`。使用独立进程、数据库、账号、环境变量及上传目录；上服务器前先检查 mskj 的端口、DNS 和证书，备份现有配置。详细范围见 [设计方案](docs/superpowers/specs/2026-11-07-local-commerce-design.md)。本仓库尚未提供可直接用于生产的部署配置。

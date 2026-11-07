@@ -95,6 +95,7 @@ export function routes(db, secret) {
   }))
   r.get('/transactions', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM coupon_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 200', [req.identity.id]); res.json({ data }) }))
   r.get('/orders', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 200', [req.identity.id]); res.json({ data }) }))
+  r.get('/orders/unread-count', user, wrap(async (req, res) => { const [[row]] = await db.query('SELECT COUNT(*) AS count FROM orders WHERE user_id=? AND pickup_code IS NOT NULL AND pickup_code <> ? AND notice_read=0', [req.identity.id, '']); res.json({ data: { count: Number(row.count) } }) }))
   r.put('/orders/:id/read', user, wrap(async (req, res) => { await db.query('UPDATE orders SET notice_read = 1 WHERE id = ? AND user_id = ?', [req.params.id, req.identity.id]); res.json({ ok: true }) }))
   r.post('/transfer', user, wrap(async (req, res) => {
     const amount = fromCents(validateTransfer(req.body.amount)); const rid = requestId(req.body.request_id), fp = fingerprint([req.body.phone, amount])

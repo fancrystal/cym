@@ -39,6 +39,12 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
   const addresses = await call('/addresses',null,childToken,'GET')
   const payload={product_id:product,address_id:addresses[0].id,request_id:crypto.randomUUID()}
   const [a,b]=await Promise.all([call('/purchases',payload,childToken), call('/purchases',payload,childToken)]); assert.equal(a.id,b.id)
+  await call(`/admin/orders/${a.id}/notice`,{pickup_code:'TEST123',message:'请领取'},admin.token,'PUT')
+  assert.equal((await call('/orders/unread-count',null,childToken,'GET')).count,1)
+  await call(`/orders/${a.id}/read`,{},childToken,'PUT')
+  assert.equal((await call('/orders/unread-count',null,childToken,'GET')).count,0)
+  await call(`/admin/orders/${a.id}/notice`,{pickup_code:'TEST456'},admin.token,'PUT')
+  assert.equal((await call('/orders/unread-count',null,childToken,'GET')).count,1)
   const [[state]]=await db.query('SELECT balance,purchase_count FROM users WHERE id=?',[child]); assert.equal(state.balance,'30.20'); assert.equal(state.purchase_count,1)
   const [[stock]]=await db.query('SELECT stock FROM products WHERE id=?',[product]); assert.equal(stock.stock,1)
   const transfer={phone:firstPhone,amount:'10',password:'testpass',request_id:crypto.randomUUID()}
