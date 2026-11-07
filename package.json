@@ -1,0 +1,8 @@
+{
+  "name": "cym",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test packages/backend/test/*.test.js" }
+}
