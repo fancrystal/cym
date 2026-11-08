@@ -1,11 +1,16 @@
 import express from 'express'
 import jwt from 'jsonwebtoken'
+import { rateLimit } from 'express-rate-limit'
 import { routes } from './routes.js'
 
 export function createApp({ db, secret } = {}) {
   const app = express()
   app.disable('x-powered-by')
+  app.set('trust proxy', 'loopback')
   app.use(express.json({ limit: '1mb' }))
+  const loginLimit = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, skipSuccessfulRequests: true, standardHeaders: 'draft-7', legacyHeaders: false, message: { message: '尝试次数过多，请稍后再试' } })
+  app.use(['/api/auth/login', '/api/admin/login'], loginLimit)
+  app.use(['/api/auth/register', '/api/transfer'], rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, skipSuccessfulRequests: true, standardHeaders: 'draft-7', legacyHeaders: false, message: { message: '尝试次数过多，请稍后再试' } }))
   app.get('/api/health', (_req, res) => res.json({ ok: true }))
   const auth = (req, res, next) => {
     try { req.identity = jwt.verify((req.headers.authorization || '').replace(/^Bearer\s+/i, ''), secret); next() }

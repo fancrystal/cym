@@ -2,7 +2,7 @@
 
 移动 H5、商圈管理后台和独立 API。商圈用户通过邀请码或二维码注册，使用产品券购买商品、查看团队和订单；后台管理用户、商品、产品券充值、订单及到货通知。项目不含原 mskj 的代理、VIP、通证、权益值、贡献值、聊天室和语音模块。
 
-> 当前为本地预览版本。购买和转赠的基本流程已做 MySQL 联调；更多并发、异常恢复、权限及手机页面测试尚需完成，暂不应投入生产或连接真实用户资产。
+> 项目仍需继续完善：购买和转赠的基本流程已做 MySQL 联调，尚需补充异常恢复、权限和手机页面的完整验收。独立的用户确认收货功能尚未实现，不应将到货通知当作确认收货。
 
 ## 本地环境
 
@@ -40,4 +40,4 @@ corepack pnpm --filter @cym/admin build
 
 ## 部署规划
 
-H5 使用 `cym.green`，后台使用 `admin.cym.green`，分别由独立 Nginx 站点提供静态文件并同源代理 `/api`。使用独立进程、数据库、账号、环境变量及上传目录；上服务器前先检查 mskj 的端口、DNS 和证书，备份现有配置。详细范围见 [设计方案](docs/superpowers/specs/2026-11-07-local-commerce-design.md)。本仓库尚未提供可直接用于生产的部署配置。
+H5 使用 `cym.green`，后台使用 `admin.cym.green`，分别由独立 Nginx 站点提供静态文件并同源代理 `/api`。API 使用 `deploy/cym-backend.service`；Nginx 参考 `deploy/cym-web.nginx.conf` 和 `deploy/cym-admin.nginx.conf`，证书申请前使用对应的 ACME 临时配置。服务器目录为 `/srv/cym`，独立数据库为 `cym_db`，仅监听本机 3100 端口，敏感环境变量保存在 `/srv/cym/shared/backend.env`。执行前检查域名、端口、已有站点及数据库名称并备份 Nginx 配置；不要导入本地机器人数据。详细范围见 [设计方案](docs/superpowers/specs/2026-11-07-local-commerce-design.md)。
