@@ -37,6 +37,13 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
   const registered = await call('/auth/register',{phone:childPhone,username:`child_${suffix}`,password:'testpass',invite_code:invite}); const childToken=registered.token
   const [[found]] = await db.query('SELECT id,parent_id FROM users WHERE phone=?',[childPhone]); child=found.id; assert.equal(found.parent_id,first)
   const admin = await call('/admin/login',{username:process.env.ADMIN_USERNAME || 'admin',password:process.env.ADMIN_PASSWORD})
+  const status = async (path, token, method='GET', body) => (await fetch(`http://127.0.0.1:${server.address().port}/api${path}`, {method,headers:{'content-type':'application/json',...(token ? {authorization:`Bearer ${token}`} : {})},...(body ? {body:JSON.stringify(body)} : {})})).status
+  assert.equal(await status('/admin/users',childToken),403)
+  assert.equal(await status('/orders',admin.token),403)
+  assert.equal(await status('/orders',null),401)
+  await call(`/admin/users/${child}/status`,{status:'disabled'},admin.token,'PUT')
+  assert.equal(await status('/orders',childToken),401)
+  await call(`/admin/users/${child}/status`,{status:'active'},admin.token,'PUT')
   const topup={amount:'100.00',request_id:crypto.randomUUID()}; await Promise.all([call(`/admin/users/${child}/topup`,topup,admin.token), call(`/admin/users/${child}/topup`,topup,admin.token)])
   await call('/admin/products',{name:productName,description:'测试',category:'生活用品',cost:'69.80',reward:'30.00',stock:2},admin.token)
   const [[p]] = await db.query('SELECT id,category FROM products WHERE name=?',[productName]); product=p.id; assert.equal(p.category,'生活用品')
