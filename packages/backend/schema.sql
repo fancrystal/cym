@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS orders (
   pickup_code VARCHAR(100) NULL,
   pickup_message VARCHAR(500) NULL,
   notice_read BOOLEAN NOT NULL DEFAULT FALSE,
+  received_at TIMESTAMP NULL DEFAULT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_order_request (user_id, request_id),
   INDEX idx_orders_created (created_at),

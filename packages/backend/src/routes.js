@@ -1,4 +1,4 @@
-import express from 'express'
+﻿import express from 'express'
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
@@ -95,9 +95,14 @@ export function routes(db, secret) {
     res.json({ data })
   }))
   r.get('/transactions', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM coupon_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 200', [req.identity.id]); res.json({ data }) }))
-  r.get('/orders', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC LIMIT 200', [req.identity.id]); res.json({ data }) }))
+  r.get('/orders', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM orders WHERE user_id = ? ORDER BY id DESC', [req.identity.id]); res.json({ data }) }))
   r.get('/orders/unread-count', user, wrap(async (req, res) => { const [[row]] = await db.query('SELECT COUNT(*) AS count FROM orders WHERE user_id=? AND pickup_code IS NOT NULL AND pickup_code <> ? AND notice_read=0', [req.identity.id, '']); res.json({ data: { count: Number(row.count) } }) }))
   r.put('/orders/:id/read', user, wrap(async (req, res) => { await db.query('UPDATE orders SET notice_read = 1 WHERE id = ? AND user_id = ?', [req.params.id, req.identity.id]); res.json({ ok: true }) }))
+  r.put('/orders/:id/confirm', user, wrap(async (req, res) => {
+    const [result] = await db.query("UPDATE orders SET received_at = COALESCE(received_at, CURRENT_TIMESTAMP), notice_read = 1 WHERE id = ? AND user_id = ? AND status <> 'cancelled' AND pickup_code IS NOT NULL AND pickup_code <> ''", [req.params.id, req.identity.id])
+    if (!result.affectedRows) { const [[order]] = await db.query('SELECT id FROM orders WHERE id = ? AND user_id = ?', [req.params.id, req.identity.id]); if (!order) throw fail('订单不存在', 404); throw fail('收到到货通知后才能确认收货') }
+    res.json({ ok: true })
+  }))
   r.post('/transfer', user, wrap(async (req, res) => {
     const amount = fromCents(validateTransfer(req.body.amount)); const rid = requestId(req.body.request_id), fp = fingerprint([req.body.phone, amount])
     const result = await transaction(async c => {
@@ -140,7 +145,8 @@ export function routes(db, secret) {
       return { id: order.insertId, order_no: orderNo }
     }); res.json({ data })
   }))
-  r.get('/admin/users', admin, wrap(async (_req, res) => { const [data] = await db.query('SELECT id,phone,username,invite_code,parent_id,is_root,status,balance,purchase_count,created_at FROM users ORDER BY id DESC LIMIT 500'); res.json({ data }) }))
+  r.get('/admin/users', admin, wrap(async (req, res) => { const q = String(req.query.q || '').trim().slice(0, 100); const pattern = `%${q}%`; const [data] = await db.query('SELECT id,phone,username,invite_code,parent_id,is_root,status,balance,purchase_count,created_at FROM users WHERE (? = ? OR username LIKE ? OR phone LIKE ? OR CAST(id AS CHAR) = ?) ORDER BY id DESC LIMIT 500', [q,'',pattern,pattern,q]); res.json({ data }) }))
+  r.get('/admin/users/:id/transactions', admin, wrap(async (req, res) => { const [data] = await db.query('SELECT id,type,amount,description,order_id,created_at FROM coupon_transactions WHERE user_id=? ORDER BY id DESC LIMIT 500', [req.params.id]); res.json({ data }) }))
   r.put('/admin/users/:id/status', admin, wrap(async (req, res) => { if (!['active','disabled'].includes(req.body.status)) throw fail('状态无效'); const [result] = await db.query('UPDATE users SET status=? WHERE id=? AND is_root=0', [req.body.status,req.params.id]); if (!result.affectedRows) throw fail('用户不存在或为根账户'); res.json({ ok: true }) }))
   r.post('/admin/users/:id/topup', admin, wrap(async (req, res) => {
     const amount = fromCents(toCents(req.body.amount)), rid = requestId(req.body.request_id), fp = fingerprint([String(req.params.id), amount]); if (toCents(amount) < 1) throw fail('充值金额必须大于零')
@@ -156,8 +162,8 @@ export function routes(db, secret) {
     const b = req.body; required(b.name, '请输入商品名称'); const cost = fromCents(toCents(b.cost)), reward = fromCents(toCents(b.reward)); const stock = Number(b.stock); if (!Number.isSafeInteger(stock) || stock < 0) throw fail('库存无效')
     await db.query('UPDATE products SET name=?,category=?,description=?,image=?,cost=?,reward=?,stock=?,active=?,options=?,detail_images=? WHERE id=?', [b.name,productCategory(b.category),b.description || '',b.image || '',cost,reward,stock,b.active ? 1 : 0,JSON.stringify(b.options || []),JSON.stringify(b.detail_images || []),req.params.id]); res.json({ ok: true })
   }))
-  r.get('/admin/orders', admin, wrap(async (_req, res) => { const [data] = await db.query('SELECT o.*, u.username, u.phone, recipient.username recipient_name FROM orders o JOIN users u ON u.id=o.user_id JOIN users recipient ON recipient.id=o.recipient_id ORDER BY o.id DESC LIMIT 500'); res.json({ data }) }))
+  r.get('/admin/orders', admin, wrap(async (req, res) => { const q = String(req.query.q || '').trim().slice(0, 100); const pattern = `%${q}%`; const [data] = await db.query('SELECT o.*, u.username, u.phone, recipient.username recipient_name FROM orders o JOIN users u ON u.id=o.user_id JOIN users recipient ON recipient.id=o.recipient_id WHERE (? = ? OR o.order_no LIKE ? OR o.product_name LIKE ? OR u.username LIKE ? OR u.phone LIKE ?) ORDER BY o.id DESC LIMIT 500', [q,'',pattern,pattern,pattern,pattern]); res.json({ data }) }))
   r.put('/admin/orders/:id/notice', admin, wrap(async (req, res) => { const code = String(req.body.pickup_code || '').trim(); if (!code || code.length > 100 || String(req.body.message || '').length > 500) throw fail('提货码或留言无效'); await db.query('UPDATE orders SET pickup_code=?, pickup_message=?, notice_read=0 WHERE id=? AND status <> ?', [code,req.body.message || '',req.params.id,'cancelled']); res.json({ ok: true }) }))
-  r.get('/admin/overview', admin, wrap(async (_req, res) => { const [[data]] = await db.query('SELECT COUNT(*) order_count, COALESCE(SUM(cost),0) total_cost, COALESCE(SUM(reward),0) total_reward FROM orders'); res.json({ data }) }))
+  r.get('/admin/overview', admin, wrap(async (_req, res) => { const [[data]] = await db.query("SELECT COUNT(*) order_count, COALESCE(SUM(cost),0) total_cost, COALESCE(SUM(reward),0) total_reward FROM orders WHERE status='completed'"); const [[users]] = await db.query('SELECT COUNT(*) AS user_count FROM users'); const [trend] = await db.query("SELECT DATE_FORMAT(created_at, '%Y-%m-%d') day, COUNT(*) order_count, COALESCE(SUM(cost),0) total_cost FROM orders WHERE status='completed' AND created_at >= CURRENT_DATE - INTERVAL 29 DAY GROUP BY day ORDER BY day DESC"); const [products] = await db.query("SELECT p.id product_id, p.name product_name, COUNT(*) order_count, COALESCE(SUM(o.cost),0) total_cost FROM orders o JOIN products p ON p.id=o.product_id WHERE o.status='completed' GROUP BY p.id,p.name ORDER BY order_count DESC, p.id DESC LIMIT 10"); res.json({ data: { ...data, user_count: users.user_count, trend, products } }) }))
   return r
 }

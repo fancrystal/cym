@@ -5,10 +5,12 @@ export function databaseOptions(env = process.env) {
   return {
     host: env.DB_HOST || '127.0.0.1', port: Number(env.DB_PORT || 3306),
     user: env.DB_USER, password: env.DB_PASSWORD, database: env.DB_NAME,
-    decimalNumbers: false, charset: 'utf8mb4',
+    decimalNumbers: false, charset: 'utf8mb4', timezone: '+08:00',
   }
 }
 
 export function createPool() {
-  return mysql.createPool({ ...databaseOptions(), waitForConnections: true, connectionLimit: 10 })
+  const pool = mysql.createPool({ ...databaseOptions(), waitForConnections: true, connectionLimit: 10 })
+  pool.on('connection', connection => connection.query("SET time_zone = '+08:00'"))
+  return pool
 }
