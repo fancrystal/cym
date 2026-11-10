@@ -11,6 +11,9 @@
 - 安装依赖：`corepack pnpm install`。
 - 将 `packages/backend/.env.example` 复制为 `packages/backend/.env`，填写数据库配置、随机且至少 32 位的 `JWT_SECRET`。配置文件不应提交。
 - 在 `packages/backend` 目录执行 `corepack pnpm init-db` 创建表。
+- 商品图片由后台选择本地文件上传，支持 JPG、PNG、GIF、WebP，每张不超过 5MB；详情图最多 9 张。后台可逐条添加款式，不需要填写代码。
+- 图片默认保存在后端工作目录的 `uploads` 文件夹，可通过 `UPLOAD_DIR` 指定持久目录。生产环境使用 `/srv/cym/uploads`，该目录必须由服务用户 `cym` 可写，并与数据库一起备份，发布新版本不得清空。启用服务配置前须先创建该目录并设置权限。
+- 替换图片或取消编辑不会自动删除已上传文件，以避免误删仍被使用的图片；运营时需监控该目录的磁盘占用，并在备份后谨慎清理未引用文件。
 - 已有数据库升级前先备份，再执行相同的 `corepack pnpm init-db`；初始化脚本会为旧订单表补充收货确认时间字段，不删除既有数据。
 - 在该目录设置 `ROOT_PASSWORD` 和 `ADMIN_PASSWORD` 环境变量，执行 `corepack pnpm seed` 初始化商圈根账户和管理员；管理员名称可由 `ADMIN_USERNAME` 指定，默认为 `admin`。重复运行不会重置现有密码。
 - 首批普通用户由运营方入库：`phone`、`username`、`password_hash`（bcrypt）、唯一 `invite_code` 必填；`is_root=0`，初始 `balance=0`、`purchase_count=0`。后续用户可使用邀请码注册。系统根账户不能邀请或购买。

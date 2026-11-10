@@ -8,12 +8,14 @@ User=cym
 Group=cym
 WorkingDirectory=/srv/cym/current/packages/backend
 EnvironmentFile=/srv/cym/shared/backend.env
+Environment=UPLOAD_DIR=/srv/cym/uploads
 ExecStart=/usr/bin/node /srv/cym/current/packages/backend/src/index.js
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
+ReadWritePaths=/srv/cym/uploads
 ProtectHome=true
 
 [Install]

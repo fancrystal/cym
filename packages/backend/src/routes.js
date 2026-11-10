@@ -2,6 +2,9 @@
 import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
+import path from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import sharp from 'sharp'
 import { toCents, fromCents, validateTransfer } from './commerce/money.js'
 import { resolveRewardRecipient } from './commerce/reward-recipient.js'
 
@@ -11,10 +14,18 @@ const required = (value, message) => { if (!value) throw fail(message); return v
 const requestId = value => { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(value)) throw fail('请求标识无效'); return value }
 const phoneValid = phone => /^1\d{10}$/.test(phone || '')
 const productCategory = value => { if (value == null || value === '') return '未分类'; if (typeof value !== 'string' || !value.trim() || value.trim().length > 40) throw fail('商品分类需为 1 至 40 个字符'); return value.trim() }
+const productLists = body => {
+  const options = body.options ?? [], images = body.detail_images ?? []
+  if (!Array.isArray(options) || options.length > 50) throw fail('商品款式格式无效')
+  const ids = new Set()
+  const normalized = options.map(o => { if (!o || typeof o.id !== 'string' || !o.id.trim() || o.id.length > 100 || typeof o.label !== 'string' || !o.label.trim() || o.label.length > 100 || ids.has(o.id)) throw fail('款式名称或编号无效'); ids.add(o.id); return {id:o.id,label:o.label.trim()} })
+  if (!Array.isArray(images) || images.length > 9 || images.some(x => typeof x !== 'string' || !x || x.length > 1000)) throw fail('详情图片无效，最多 9 张')
+  return {options:normalized,images}
+}
 const fingerprint = values => crypto.createHash('sha256').update(JSON.stringify(values)).digest('hex')
 const sameRequest = (row, expected) => { if (row.request_fingerprint !== expected) throw fail('请求标识已用于其他操作', 409); return row }
 
-export function routes(db, secret) {
+export function routes(db, secret, uploadDir) {
   const r = express.Router()
   const authorize = role => async (req, res, next) => {
     try {
@@ -26,6 +37,20 @@ export function routes(db, secret) {
     } catch (e) { next(e.status ? e : fail('请先登录', 401)) }
   }
   const user = authorize('user'), admin = authorize('admin')
+  r.post('/admin/uploads', admin, express.raw({ type: ['image/jpeg','image/png','image/webp','image/gif'], limit: '5mb' }), wrap(async (req, res) => {
+    const b = req.body
+    if (!Buffer.isBuffer(b) || !b.length) throw fail('请选择 JPG、PNG、GIF 或 WebP 图片')
+    const isPng = b.length >= 8 && b.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex'))
+    const isJpeg = b.length >= 3 && b.subarray(0,3).equals(Buffer.from('ffd8ff','hex'))
+    const isGif = b.length >= 6 && ['GIF87a','GIF89a'].includes(b.subarray(0,6).toString('ascii'))
+    const isWebp = b.length >= 12 && b.subarray(0,4).toString('ascii') === 'RIFF' && b.subarray(8,12).toString('ascii') === 'WEBP'
+    const ext = isPng ? 'png' : isJpeg ? 'jpg' : isGif ? 'gif' : isWebp ? 'webp' : null
+    if (!ext) throw fail('图片格式无效，请选择 JPG、PNG、GIF 或 WebP')
+    try { await sharp(b, { limitInputPixels: 40000000, failOn: 'warning' }).resize(1,1).toBuffer() } catch { throw fail('图片已损坏或尺寸过大，请重新选择') }
+    const filename = `${crypto.randomBytes(20).toString('hex')}.${ext}`
+    await mkdir(uploadDir, { recursive: true }); await writeFile(path.join(uploadDir, filename), b, { flag:'wx' })
+    res.json({data:{url:`/api/uploads/${filename}`}})
+  }))
   const token = (id, role) => jwt.sign({ id, role }, secret, { expiresIn: '7d' })
   const transaction = async fn => {
     for (let attempt = 0; ; attempt += 1) {
@@ -79,16 +104,17 @@ export function routes(db, secret) {
   }))
   r.get('/addresses', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC', [req.identity.id]); res.json({ data }) }))
   r.post('/addresses', user, wrap(async (req, res) => {
-    const { contact_name, contact_phone, province, city, district, detail } = req.body
-    if (![contact_name, contact_phone, province, city, district, detail].every(x => typeof x === 'string' && x.trim())) throw fail('请填写完整地址')
+    const { contact_name, contact_phone, detail } = req.body
+    const { province = '', city = '', district = '' } = req.body
+    if (![contact_name, contact_phone, detail].every(x => typeof x === 'string' && x.trim()) || contact_name.length > 100 || contact_phone.length > 20 || detail.length > 500) throw fail('请填写收件人、电话和不超过 500 字的收货地址')
     await transaction(async c => { await c.query('UPDATE addresses SET is_default = 0 WHERE user_id = ?', [req.identity.id]); await c.query('INSERT INTO addresses (user_id, contact_name, contact_phone, province, city, district, detail, is_default) VALUES (?, ?, ?, ?, ?, ?, ?, 1)', [req.identity.id, contact_name, contact_phone, province, city, district, detail]) })
     res.json({ ok: true })
   }))
   r.delete('/addresses/:id', user, wrap(async (req, res) => { await db.query('DELETE FROM addresses WHERE id = ? AND user_id = ?', [req.params.id, req.identity.id]); res.json({ ok: true }) }))
   r.put('/addresses/:id', user, wrap(async (req, res) => {
     const b = req.body
-    if (![b.contact_name,b.contact_phone,b.province,b.city,b.district,b.detail].every(x => typeof x === 'string' && x.trim())) throw fail('请填写完整地址')
-    await db.query('UPDATE addresses SET contact_name=?,contact_phone=?,province=?,city=?,district=?,detail=? WHERE id=? AND user_id=?', [b.contact_name,b.contact_phone,b.province,b.city,b.district,b.detail,req.params.id,req.identity.id]); res.json({ ok: true })
+    if (![b.contact_name,b.contact_phone,b.detail].every(x => typeof x === 'string' && x.trim()) || b.contact_name.length > 100 || b.contact_phone.length > 20 || b.detail.length > 500) throw fail('请填写收件人、电话和不超过 500 字的收货地址')
+    await db.query('UPDATE addresses SET contact_name=?,contact_phone=?,province=?,city=?,district=?,detail=? WHERE id=? AND user_id=?', [b.contact_name,b.contact_phone,b.province || '',b.city || '',b.district || '',b.detail,req.params.id,req.identity.id]); res.json({ ok: true })
   }))
   r.get('/team', user, wrap(async (req, res) => {
     const [data] = await db.query('WITH RECURSIVE team AS (SELECT id, 1 depth FROM users WHERE parent_id = ? UNION ALL SELECT u.id, team.depth + 1 FROM users u JOIN team ON u.parent_id = team.id WHERE team.depth < 100) SELECT depth, COUNT(*) count FROM team GROUP BY depth ORDER BY depth', [req.identity.id])
@@ -128,7 +154,8 @@ export function routes(db, secret) {
     const data = await transaction(async c => {
       const [[buyer]] = await c.query('SELECT * FROM users WHERE id = ? FOR UPDATE', [req.identity.id])
       const [[existing]] = await c.query('SELECT id, order_no, request_fingerprint FROM orders WHERE user_id = ? AND request_id = ? FOR UPDATE', [req.identity.id, rid]); if (existing) return sameRequest(existing, fp)
-      if (!buyer || buyer.is_root || buyer.status !== 'active') throw fail('账户不可购买')
+      if (buyer?.is_root) throw fail('根账户用于承接商圈收益，不能购买商品，请使用普通用户账户')
+      if (!buyer || buyer.status !== 'active') throw fail('账户不可购买')
       const [[product]] = await c.query('SELECT * FROM products WHERE id = ? FOR UPDATE', [productId])
       if (!product || !product.active || product.stock < 1) throw fail('商品不可购买或库存不足')
       if (toCents(buyer.balance) < toCents(product.cost)) throw fail('产品券余额不足')
@@ -155,12 +182,14 @@ export function routes(db, secret) {
   r.get('/admin/products', admin, wrap(async (_req, res) => { const [data] = await db.query('SELECT * FROM products ORDER BY id DESC'); res.json({ data }) }))
   r.post('/admin/products', admin, wrap(async (req, res) => {
     const b = req.body; required(b.name, '请输入商品名称'); const cost = fromCents(toCents(b.cost)), reward = fromCents(toCents(b.reward)); const stock = Number(b.stock)
+    const {options,images}=productLists(b)
     if (!Number.isSafeInteger(stock) || stock < 0) throw fail('库存无效')
-    await db.query('INSERT INTO products (name,category,description,image,cost,reward,stock,options,detail_images) VALUES (?,?,?,?,?,?,?,?,?)', [b.name, productCategory(b.category), b.description || '', b.image || '', cost, reward, stock, JSON.stringify(b.options || []), JSON.stringify(b.detail_images || [])]); res.json({ ok: true })
+    await db.query('INSERT INTO products (name,category,description,image,cost,reward,stock,active,options,detail_images) VALUES (?,?,?,?,?,?,?,?,?,?)', [b.name, productCategory(b.category), b.description || '', b.image || '', cost, reward, stock, b.active === false ? 0 : 1, JSON.stringify(options), JSON.stringify(images)]); res.json({ ok: true })
   }))
   r.put('/admin/products/:id', admin, wrap(async (req, res) => {
     const b = req.body; required(b.name, '请输入商品名称'); const cost = fromCents(toCents(b.cost)), reward = fromCents(toCents(b.reward)); const stock = Number(b.stock); if (!Number.isSafeInteger(stock) || stock < 0) throw fail('库存无效')
-    await db.query('UPDATE products SET name=?,category=?,description=?,image=?,cost=?,reward=?,stock=?,active=?,options=?,detail_images=? WHERE id=?', [b.name,productCategory(b.category),b.description || '',b.image || '',cost,reward,stock,b.active ? 1 : 0,JSON.stringify(b.options || []),JSON.stringify(b.detail_images || []),req.params.id]); res.json({ ok: true })
+    const {options,images}=productLists(b)
+    await db.query('UPDATE products SET name=?,category=?,description=?,image=?,cost=?,reward=?,stock=?,active=?,options=?,detail_images=? WHERE id=?', [b.name,productCategory(b.category),b.description || '',b.image || '',cost,reward,stock,b.active ? 1 : 0,JSON.stringify(options),JSON.stringify(images),req.params.id]); res.json({ ok: true })
   }))
   r.get('/admin/orders', admin, wrap(async (req, res) => { const q = String(req.query.q || '').trim().slice(0, 100); const pattern = `%${q}%`; const [data] = await db.query('SELECT o.*, u.username, u.phone, recipient.username recipient_name FROM orders o JOIN users u ON u.id=o.user_id JOIN users recipient ON recipient.id=o.recipient_id WHERE (? = ? OR o.order_no LIKE ? OR o.product_name LIKE ? OR u.username LIKE ? OR u.phone LIKE ?) ORDER BY o.id DESC LIMIT 500', [q,'',pattern,pattern,pattern,pattern]); res.json({ data }) }))
   r.put('/admin/orders/:id/notice', admin, wrap(async (req, res) => { const code = String(req.body.pickup_code || '').trim(); if (!code || code.length > 100 || String(req.body.message || '').length > 500) throw fail('提货码或留言无效'); await db.query('UPDATE orders SET pickup_code=?, pickup_message=?, notice_read=0 WHERE id=? AND status <> ?', [code,req.body.message || '',req.params.id,'cancelled']); res.json({ ok: true }) }))

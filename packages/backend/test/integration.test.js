@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import crypto from 'node:crypto'
 import bcrypt from 'bcryptjs'
+import jwt from 'jsonwebtoken'
 import 'dotenv/config'
 import { createPool } from '../src/db.js'
 import { createApp } from '../src/app.js'
@@ -45,15 +46,26 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
   assert.equal(await status('/orders',childToken),401)
   await call(`/admin/users/${child}/status`,{status:'active'},admin.token,'PUT')
   const topup={amount:'100.00',request_id:crypto.randomUUID()}; await Promise.all([call(`/admin/users/${child}/topup`,topup,admin.token), call(`/admin/users/${child}/topup`,topup,admin.token)])
-  await call('/admin/products',{name:productName,description:'测试',category:'生活用品',cost:'69.80',reward:'30.00',stock:2},admin.token)
+  const invalidProduct={name:productName,description:'测试',cost:'1',reward:'0',stock:1}
+  assert.equal(await status('/admin/products',admin.token,'POST',{...invalidProduct,options:{bad:true}}),400)
+  assert.equal(await status('/admin/products',admin.token,'POST',{...invalidProduct,options:[{id:'a',label:'红色'},{id:'a',label:'蓝色'}]}),400)
+  assert.equal(await status('/admin/products',admin.token,'POST',{...invalidProduct,detail_images:Array(10).fill('/api/uploads/test.png')}),400)
+  await call('/admin/products',{name:productName,description:'测试',category:'生活用品',cost:'69.80',reward:'30.00',stock:2,active:false},admin.token)
   const [[p]] = await db.query('SELECT id,category FROM products WHERE name=?',[productName]); product=p.id; assert.equal(p.category,'生活用品')
-  const visible = await call('/products',null,null,'GET'); assert.equal(visible.find(item=>item.id===product)?.category,'生活用品')
-  await call(`/admin/products/${product}`,{name:productName,description:'测试',category:'健康食品',cost:'69.80',reward:'30.00',stock:2,active:true},admin.token,'PUT')
+  const visible = await call('/products',null,null,'GET'); assert.equal(visible.find(item=>item.id===product),undefined)
+  await call(`/admin/products/${product}`,{name:productName,description:'测试',category:'健康食品',cost:'69.80',reward:'30.00',stock:2,active:true,options:[{id:'red',label:'红色'},{id:'blue',label:'蓝色'}]},admin.token,'PUT')
   const edited = await call('/products',null,null,'GET'); assert.equal(edited.find(item=>item.id===product)?.category,'健康食品')
-  await call('/addresses',{contact_name:'测试',contact_phone:childPhone,province:'上海',city:'上海',district:'浦东',detail:'测试地址'},childToken)
+  await call('/addresses',{contact_name:'测试',contact_phone:childPhone,detail:'上海市浦东测试地址'},childToken)
   const addresses = await call('/addresses',null,childToken,'GET')
-  const payload={product_id:product,address_id:addresses[0].id,request_id:crypto.randomUUID()}
+  assert.equal(addresses[0].detail,'上海市浦东测试地址')
+  await call(`/addresses/${addresses[0].id}`,{contact_name:'测试',contact_phone:childPhone,detail:'上海市浦东新地址'},childToken,'PUT')
+  const payload={product_id:product,address_id:addresses[0].id,variant:'red',request_id:crypto.randomUUID()}
+  const [[root]]=await db.query('SELECT id FROM users WHERE is_root=1 LIMIT 1')
+  const rootToken=jwt.sign({id:root.id,role:'user'},process.env.JWT_SECRET)
+  const rootAttempt=await fetch(`http://127.0.0.1:${server.address().port}/api/purchases`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${rootToken}`},body:JSON.stringify(payload)})
+  assert.equal(rootAttempt.status,400); assert.match((await rootAttempt.json()).message,/根账户/)
   const [a,b]=await Promise.all([call('/purchases',payload,childToken), call('/purchases',payload,childToken)]); assert.equal(a.id,b.id)
+  const [[purchased]]=await db.query('SELECT variant,address FROM orders WHERE id=?',[a.id]); assert.equal(purchased.variant,'红色')
   const firstLogin = await call('/auth/login',{phone:firstPhone,password:'testpass'})
   const confirm = (token) => fetch(`http://127.0.0.1:${server.address().port}/api/orders/${a.id}/confirm`, {method:'PUT',headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:'{}'})
   assert.equal((await confirm(firstLogin.token)).status,404)
