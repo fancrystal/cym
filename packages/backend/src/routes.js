@@ -3,16 +3,19 @@ import bcrypt from 'bcryptjs'
 import crypto from 'node:crypto'
 import jwt from 'jsonwebtoken'
 import path from 'node:path'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile, unlink } from 'node:fs/promises'
 import sharp from 'sharp'
 import { toCents, fromCents, validateTransfer } from './commerce/money.js'
 import { resolveRewardRecipient } from './commerce/reward-recipient.js'
+import { withdrawalAmounts } from './commerce/withdrawal.js'
+import { encryptBankAccount, decryptBankAccount } from './commerce/bank-account.js'
 
 const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next)
 const fail = (message, status = 400) => Object.assign(new Error(message), { status })
 const required = (value, message) => { if (!value) throw fail(message); return value }
 const requestId = value => { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(value)) throw fail('请求标识无效'); return value }
 const phoneValid = phone => /^1\d{10}$/.test(phone || '')
+const alipayValid = value => typeof value==='string' && value.trim().length>=5 && Buffer.byteLength(value.trim(),'utf8')<=100 && !/\s/.test(value.trim())
 const productCategory = value => { if (value == null || value === '') return '未分类'; if (typeof value !== 'string' || !value.trim() || value.trim().length > 40) throw fail('商品分类需为 1 至 40 个字符'); return value.trim() }
 const productLists = body => {
   const options = body.options ?? [], images = body.detail_images ?? []
@@ -37,6 +40,7 @@ export function routes(db, secret, uploadDir) {
     } catch (e) { next(e.status ? e : fail('请先登录', 401)) }
   }
   const user = authorize('user'), admin = authorize('admin')
+  const userOrAdmin = (req,res,next) => { try { const id=jwt.verify((req.headers.authorization||'').replace(/^Bearer\s+/i,''),secret); if(!['user','admin'].includes(id.role))throw fail('无权限',403); return authorize(id.role)(req,res,next) } catch(e){return next(e.status?e:fail('请先登录',401))} }
   r.post('/admin/uploads', admin, express.raw({ type: ['image/jpeg','image/png','image/webp','image/gif'], limit: '5mb' }), wrap(async (req, res) => {
     const b = req.body
     if (!Buffer.isBuffer(b) || !b.length) throw fail('请选择 JPG、PNG、GIF 或 WebP 图片')
@@ -69,13 +73,15 @@ export function routes(db, secret, uploadDir) {
     res.json({ token: token(row.id, 'user') })
   }))
   r.post('/auth/register', wrap(async (req, res) => {
-    const { phone, username, password, invite_code } = req.body
+    const { phone, username, password, invite_code, alipay_account } = req.body
     if (!phoneValid(phone) || !/^[\w\u4e00-\u9fa5]{2,20}$/.test(username || '') || typeof password !== 'string' || password.length < 6 || password.length > 64) throw fail('请填写有效的手机号、用户名和密码')
+    if(!alipayValid(alipay_account))throw fail('请填写有效的支付宝账号')
+    const alipayEncrypted=encryptBankAccount(alipay_account.trim(),process.env.WITHDRAWAL_ENCRYPTION_KEY)
     const hash = await bcrypt.hash(password, 10)
     const id = await transaction(async c => {
       const [[parent]] = await c.query("SELECT id FROM users WHERE invite_code = ? AND is_root = 0 AND status = 'active' FOR UPDATE", [String(invite_code || '').toUpperCase()])
       if (!parent) throw fail('邀请码无效')
-      const [result] = await c.query('INSERT INTO users (phone, username, password_hash, invite_code, parent_id) VALUES (?, ?, ?, ?, ?)', [phone, username, hash, crypto.randomBytes(6).toString('hex').toUpperCase(), parent.id])
+      const [result] = await c.query('INSERT INTO users (phone, username, password_hash, alipay_account, invite_code, parent_id) VALUES (?, ?, ?, ?, ?, ?)', [phone, username, hash, alipayEncrypted, crypto.randomBytes(6).toString('hex').toUpperCase(), parent.id])
       return result.insertId
     })
     res.json({ token: token(id, 'user') })
@@ -102,6 +108,7 @@ export function routes(db, secret, uploadDir) {
     })
     res.json({ ok: true })
   }))
+  r.get('/account/alipay',user,wrap(async(req,res)=>{res.set('Cache-Control','no-store');const [[row]]=await db.query('SELECT alipay_account FROM users WHERE id=?',[req.identity.id]);const account=row?.alipay_account?decryptBankAccount(row.alipay_account,process.env.WITHDRAWAL_ENCRYPTION_KEY):'';res.json({data:{masked:account?'****'+account.slice(-4):''}})}))
   r.get('/addresses', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM addresses WHERE user_id = ? ORDER BY is_default DESC, id DESC', [req.identity.id]); res.json({ data }) }))
   r.post('/addresses', user, wrap(async (req, res) => {
     const { contact_name, contact_phone, detail } = req.body
@@ -119,6 +126,50 @@ export function routes(db, secret, uploadDir) {
   r.get('/team', user, wrap(async (req, res) => {
     const [data] = await db.query('WITH RECURSIVE team AS (SELECT id, 1 depth FROM users WHERE parent_id = ? UNION ALL SELECT u.id, team.depth + 1 FROM users u JOIN team ON u.parent_id = team.id WHERE team.depth < 100) SELECT depth, COUNT(*) count FROM team GROUP BY depth ORDER BY depth', [req.identity.id])
     res.json({ data })
+  }))
+  r.get('/team/earnings', user, wrap(async (req,res)=>{const [[row]]=await db.query("SELECT COALESCE(SUM(amount),0) total_reward FROM coupon_transactions WHERE user_id=? AND type='reward'",[req.identity.id]);res.json({data:row})}))
+  r.get('/withdrawals', user, wrap(async (req,res)=>{res.set('Cache-Control','no-store');const [data]=await db.query("SELECT id,amount,fee,net,CONCAT('****',account_last4) account_number,status,reason,created_at,reviewed_at,paid_at,transfer_note,(proof_file IS NOT NULL AND status='paid') has_proof FROM withdrawals WHERE user_id=? ORDER BY id DESC LIMIT 200",[req.identity.id]);res.json({data})}))
+  r.post('/withdrawals', user, wrap(async(req,res)=>{
+    let amounts;try{amounts=withdrawalAmounts(req.body.amount)}catch(e){throw fail(e.message)}
+    const rid=requestId(req.body.request_id)
+    const accountName=String(req.body.account_name||'').trim(), suppliedAlipay=String(req.body.alipay_account||'').trim()
+    if(!accountName||accountName.length>100 || (suppliedAlipay && !alipayValid(suppliedAlipay)))throw fail('请填写收款人和有效支付宝账号')
+    const data=await transaction(async c=>{
+      const [[account]]=await c.query("SELECT id,balance,password_hash,alipay_account FROM users WHERE id=? AND status='active' FOR UPDATE",[req.identity.id])
+      if(!account || !await bcrypt.compare(String(req.body.password||''),account.password_hash))throw fail('登录密码错误')
+      const accountNumber=suppliedAlipay || (account.alipay_account ? decryptBankAccount(account.alipay_account,process.env.WITHDRAWAL_ENCRYPTION_KEY) : '')
+      if(!alipayValid(accountNumber))throw fail('请填写支付宝账号')
+      const encryptedAccount=encryptBankAccount(accountNumber,process.env.WITHDRAWAL_ENCRYPTION_KEY), fp=fingerprint([amounts.amount,accountName,accountNumber])
+      const [[existing]]=await c.query('SELECT id,request_fingerprint FROM withdrawals WHERE user_id=? AND request_id=? FOR UPDATE',[req.identity.id,rid]);if(existing)return {id:sameRequest(existing,fp).id}
+      if(toCents(account.balance)<toCents(amounts.amount))throw fail('产品券余额不足')
+      await c.query('UPDATE users SET balance=balance-? WHERE id=?',[amounts.amount,req.identity.id])
+      if(suppliedAlipay)await c.query('UPDATE users SET alipay_account=? WHERE id=?',[encryptedAccount,req.identity.id])
+      const [insert]=await c.query('INSERT INTO withdrawals (user_id,request_id,request_fingerprint,amount,fee,net,account_name,bank_name,account_number,account_last4) VALUES (?,?,?,?,?,?,?,?,?,?)',[req.identity.id,rid,fp,amounts.amount,amounts.fee,amounts.net,accountName,'支付宝',encryptedAccount,accountNumber.slice(-4)])
+      await c.query("INSERT INTO coupon_transactions (user_id,type,amount,description) VALUES (?,'withdrawal',-?,?)",[req.identity.id,amounts.amount,`提现申请 #${insert.insertId}`])
+      return {id:insert.insertId}
+    });res.json({data})
+  }))
+  r.get('/admin/withdrawals',admin,wrap(async(_req,res)=>{res.set('Cache-Control','no-store');const [data]=await db.query("SELECT w.id,w.user_id,w.amount,w.fee,w.net,CONCAT('****',w.account_last4) account_number,w.status,w.reason,w.created_at,(w.proof_file IS NOT NULL) has_proof,w.transfer_note,u.username,u.phone FROM withdrawals w JOIN users u ON u.id=w.user_id ORDER BY (w.status IN ('pending','approved')) DESC,w.id DESC");res.json({data})}))
+  r.get('/admin/withdrawals/:id',admin,wrap(async(req,res)=>{res.set('Cache-Control','no-store');const [[data]]=await db.query('SELECT id,account_name,account_number FROM withdrawals WHERE id=?',[req.params.id]);if(!data)throw fail('提现申请不存在',404);data.account_number=decryptBankAccount(data.account_number,process.env.WITHDRAWAL_ENCRYPTION_KEY);res.json({data})}))
+  r.get('/withdrawals/:id/proof',userOrAdmin,wrap(async(req,res)=>{const [[row]]=await db.query('SELECT user_id,proof_file,status FROM withdrawals WHERE id=?',[req.params.id]);if(!row || (req.identity.role==='user' && (row.status!=='paid' || Number(row.user_id)!==Number(req.identity.id))) || (req.identity.role==='admin' && !['approved','paid'].includes(row.status)) || !/^[a-f0-9]{40}\.(jpg|png|webp)$/.test(row.proof_file||''))throw fail('转账截图不存在',404);res.set('Cache-Control','no-store');res.set('X-Content-Type-Options','nosniff');res.sendFile(path.resolve(uploadDir,'.withdrawal-proofs',row.proof_file))}))
+  r.post('/admin/withdrawals/:id/proof',admin,express.raw({type:['image/jpeg','image/png','image/webp'],limit:'5mb'}),wrap(async(req,res)=>{
+    if(!Buffer.isBuffer(req.body)||!req.body.length)throw fail('请选择转账截图')
+    let ext;try{const meta=await sharp(req.body,{limitInputPixels:40000000,failOn:'warning'}).metadata();ext={jpeg:'jpg',png:'png',webp:'webp'}[meta.format];if(!ext)throw new Error('invalid image');await sharp(req.body,{limitInputPixels:40000000,failOn:'warning'}).resize(1,1).toBuffer()}catch{throw fail('截图格式无效或图片已损坏')}
+    const dir=path.resolve(uploadDir,'.withdrawal-proofs'), filename=crypto.randomBytes(20).toString('hex')+'.'+ext, file=path.join(dir,filename)
+    await mkdir(dir,{recursive:true,mode:0o700});await writeFile(file,req.body,{flag:'wx',mode:0o600})
+    let oldFile;try{oldFile=await transaction(async c=>{const [[item]]=await c.query('SELECT status,proof_file FROM withdrawals WHERE id=? FOR UPDATE',[req.params.id]);if(!item || item.status!=='approved')throw fail('请先审核通过，转账完成后不可修改截图',409);await c.query('UPDATE withdrawals SET proof_file=? WHERE id=?',[filename,req.params.id]);return item.proof_file})}catch(e){await unlink(file).catch(()=>{});throw e}
+    if(/^[a-f0-9]{40}\.(jpg|png|webp)$/.test(oldFile||''))await unlink(path.join(dir,oldFile)).catch(()=>{})
+    res.json({ok:true})
+  }))
+  r.post('/admin/withdrawals/:id/:action',admin,wrap(async(req,res)=>{
+    const action=req.params.action;if(!['approve','reject','paid'].includes(action))throw fail('操作无效')
+    const reason=String(req.body.reason||'').trim();if(action==='reject' && (!reason||reason.length>500))throw fail('请填写驳回原因')
+    await transaction(async c=>{
+      const [[item]]=await c.query('SELECT id,user_id,amount,status,proof_file FROM withdrawals WHERE id=? FOR UPDATE',[req.params.id]);if(!item)throw fail('提现申请不存在',404)
+      if(action==='approve'){if(item.status!=='pending')throw fail('当前状态不可审核',409);await c.query("UPDATE withdrawals SET status='approved',reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?",[req.identity.id,item.id])}
+      if(action==='paid'){if(item.status!=='approved')throw fail('请先审核通过，且不可重复确认转账',409);const note=String(req.body.transfer_note||'').trim();if(!item.proof_file||!note||note.length>500)throw fail('请上传转账截图并填写转账记录');await c.query("UPDATE withdrawals SET status='paid',paid_by=?,paid_at=CURRENT_TIMESTAMP,transfer_note=? WHERE id=?",[req.identity.id,note,item.id])}
+      if(action==='reject'){if(item.status!=='pending')throw fail('仅待审核申请可驳回退券，已审核申请请线下核对',409);await c.query('SELECT id FROM users WHERE id=? FOR UPDATE',[item.user_id]);await c.query('UPDATE users SET balance=balance+? WHERE id=?',[item.amount,item.user_id]);await c.query("INSERT INTO coupon_transactions (user_id,type,amount,description) VALUES (?,'withdrawal_refund',?,?)",[item.user_id,item.amount,`提现驳回退回 #${item.id}`]);await c.query("UPDATE withdrawals SET status='rejected',reason=?,reviewed_by=?,reviewed_at=CURRENT_TIMESTAMP WHERE id=?",[reason,req.identity.id,item.id])}
+    });res.json({ok:true})
   }))
   r.get('/transactions', user, wrap(async (req, res) => { const [data] = await db.query('SELECT * FROM coupon_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 200', [req.identity.id]); res.json({ data }) }))
   r.get('/orders', user, wrap(async (req, res) => { const [data] = await db.query('SELECT o.*, p.image AS product_image FROM orders o LEFT JOIN products p ON p.id=o.product_id WHERE o.user_id = ? ORDER BY o.id DESC', [req.identity.id]); res.json({ data }) }))

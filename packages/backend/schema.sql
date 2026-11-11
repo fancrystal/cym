@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS users (
   phone VARCHAR(20) NOT NULL UNIQUE,
   username VARCHAR(80) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  alipay_account VARCHAR(255) NULL,
   invite_code VARCHAR(32) UNIQUE,
   parent_id BIGINT UNSIGNED NULL,
   is_root BOOLEAN NOT NULL DEFAULT FALSE,
@@ -83,7 +84,7 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE TABLE IF NOT EXISTS coupon_transactions (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   user_id BIGINT UNSIGNED NOT NULL,
-  type ENUM('topup','purchase','reward','transfer_in','transfer_out') NOT NULL,
+  type ENUM('topup','purchase','reward','transfer_in','transfer_out','withdrawal','withdrawal_refund') NOT NULL,
   amount DECIMAL(12,2) NOT NULL,
   description VARCHAR(255) NOT NULL,
   order_id BIGINT UNSIGNED NULL,
@@ -91,6 +92,34 @@ CREATE TABLE IF NOT EXISTS coupon_transactions (
   INDEX idx_transactions_user (user_id, id),
   FOREIGN KEY (user_id) REFERENCES users(id),
   FOREIGN KEY (order_id) REFERENCES orders(id)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  user_id BIGINT UNSIGNED NOT NULL,
+  request_id VARCHAR(64) NOT NULL,
+  request_fingerprint CHAR(64) NOT NULL,
+  amount DECIMAL(12,2) NOT NULL,
+  fee DECIMAL(12,2) NOT NULL,
+  net DECIMAL(12,2) NOT NULL,
+  account_name VARCHAR(100) NOT NULL,
+  bank_name VARCHAR(100) NOT NULL,
+  account_number VARCHAR(255) NOT NULL,
+  account_last4 CHAR(4) NOT NULL,
+  status ENUM('pending','approved','paid','rejected') NOT NULL DEFAULT 'pending',
+  reason VARCHAR(500) NULL,
+  reviewed_by BIGINT UNSIGNED NULL,
+  reviewed_at TIMESTAMP NULL,
+  paid_by BIGINT UNSIGNED NULL,
+  paid_at TIMESTAMP NULL,
+  proof_file VARCHAR(100) NULL,
+  transfer_note VARCHAR(500) NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_withdrawal_request (user_id,request_id),
+  INDEX idx_withdrawal_status (status,id),
+  FOREIGN KEY (user_id) REFERENCES users(id),
+  FOREIGN KEY (reviewed_by) REFERENCES admins(id),
+  FOREIGN KEY (paid_by) REFERENCES admins(id)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS transfers (

@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken'
 import 'dotenv/config'
 import { createPool } from '../src/db.js'
 import { createApp } from '../src/app.js'
+process.env.WITHDRAWAL_ENCRYPTION_KEY ||= '11'.repeat(32)
 
 test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致', { skip: process.env.CYM_INTEGRATION !== '1' }, async t => {
   const db = createPool(), suffix = String(Date.now()).slice(-8), firstPhone = `19${suffix}1`, childPhone = `19${suffix}2`, invite = crypto.randomBytes(6).toString('hex').toUpperCase()
@@ -35,7 +36,7 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
     const json = await response.json(); assert.equal(response.status, 200, JSON.stringify(json)); return json.data ?? json
   }
   const [created] = await db.query('INSERT INTO users (phone,username,password_hash,invite_code,purchase_count) VALUES (?,?,?,?,1)', [firstPhone,`test_${suffix}`,await bcrypt.hash('testpass',10),invite]); first=created.insertId
-  const registered = await call('/auth/register',{phone:childPhone,username:`child_${suffix}`,password:'testpass',invite_code:invite}); const childToken=registered.token
+  const registered = await call('/auth/register',{phone:childPhone,username:`child_${suffix}`,password:'testpass',invite_code:invite,alipay_account:'test@example.com'}); const childToken=registered.token
   const [[found]] = await db.query('SELECT id,parent_id FROM users WHERE phone=?',[childPhone]); child=found.id; assert.equal(found.parent_id,first)
   const admin = await call('/admin/login',{username:process.env.ADMIN_USERNAME || 'admin',password:process.env.ADMIN_PASSWORD})
   const status = async (path, token, method='GET', body) => (await fetch(`http://127.0.0.1:${server.address().port}/api${path}`, {method,headers:{'content-type':'application/json',...(token ? {authorization:`Bearer ${token}`} : {})},...(body ? {body:JSON.stringify(body)} : {})})).status
@@ -71,6 +72,8 @@ test('MySQL 注册、充值、购买、重复请求及转赠保持账目一致',
   assert.equal((await call('/orders',null,childToken,'GET')).find(order=>order.id===a.id).product_image,'/api/uploads/test-image.png')
   const [[purchased]]=await db.query('SELECT variant,address FROM orders WHERE id=?',[a.id]); assert.equal(purchased.variant,'红色')
   const firstLogin = await call('/auth/login',{phone:firstPhone,password:'testpass'})
+  const earnings = await call('/team/earnings',null,firstLogin.token,'GET')
+  assert.equal(earnings.total_reward,'30.00')
   const confirm = (token) => fetch(`http://127.0.0.1:${server.address().port}/api/orders/${a.id}/confirm`, {method:'PUT',headers:{'content-type':'application/json',authorization:`Bearer ${token}`},body:'{}'})
   assert.equal((await confirm(firstLogin.token)).status,404)
   assert.equal((await confirm(childToken)).status,400)
