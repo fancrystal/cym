@@ -6,3 +6,8 @@ dist/
 coverage/
 *.log
 uploads/
+packages/android/.gradle/
+packages/android/local.properties
+packages/android/signing.properties
+packages/android/keystore/
+packages/android/**/build/

@@ -1,0 +1,10 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "green.cym.app",
+      "sha256_cert_fingerprints": ["23:4A:B6:6E:16:7A:DF:BD:0A:18:5C:8B:94:D3:46:7D:C2:F3:45:AE:E1:78:92:65:E2:18:71:17:11:24:77:E1"]
+    }
+  }
+]

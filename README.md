@@ -31,6 +31,12 @@ corepack pnpm --filter @cym/admin dev
 
 默认 API 为 `http://127.0.0.1:3100`，H5 为 `http://127.0.0.1:3011`，后台为 `http://127.0.0.1:3012`。Vite 将 `/api` 转发给 API。
 
+## Android App
+
+独立安卓工程在 `packages/android`，打开现有 `https://cym.green`；安卓 7.0（API 24）及以上且需支持现代网页能力的系统 WebView。Android Studio 打开该目录，可执行 `gradlew.bat :app:testDebugUnitTest :app:assembleRelease` 构建与测试。安装包位于 `packages/android/app/build/outputs/apk/release/app-release.apk`；需配置本机 Android SDK 和签名信息。
+
+正式签名文件位于 `packages/android/keystore/cym-release.jks`，签名配置位于 `packages/android/signing.properties`，均被 Git 忽略。请将这两个文件分开安全备份；后续覆盖安装必须保持相同包名和签名。不要将签名文件、密码或配置提交仓库或上传至下载服务器。安卓下载页为 `https://cym.green/android-download/`。
+
 ## 验证
 
 ```sh
