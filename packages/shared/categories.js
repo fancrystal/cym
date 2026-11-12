@@ -1,7 +1,7 @@
-export const DEFAULT_CATEGORIES = Object.freeze(['生活用品', '保健适配', '水果', '蔬菜', '衣服', '家电', '个护清洁', '家居用品', '母婴用品', '数码产品'])
+export const DEFAULT_CATEGORIES = Object.freeze(['生活用品', '保健食品', '水果', '蔬菜', '衣服', '家电', '个护清洁', '家居用品', '母婴用品', '数码产品'])
 
 export function categoryName(category) {
-  return category === '健康食品' ? '保健适配' : (category || '未分类')
+  return ['健康食品', '保健适配'].includes(category) ? '保健食品' : (category || '未分类')
 }
 
 export function categoryOptions(products) {

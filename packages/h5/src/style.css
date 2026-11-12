@@ -8,3 +8,4 @@
 .shop-main .hero-reference{display:block;position:relative;aspect-ratio:900 / 258;min-height:0;padding:0;overflow:hidden;background:#ee2327}.hero-reference::after{display:none}.hero-reference img{position:absolute;top:0;left:0;width:100%;height:auto;transform:translateY(-5.721968%);max-width:none}
 .order{display:flow-root}.order-image{float:left;width:72px;height:72px;object-fit:cover;border-radius:8px;margin:0 12px 8px 0}.order-placeholder{display:grid;place-items:center;background:#fff0ee;color:#e9a6a0;font-size:30px}.order .notice{clear:both}
 .proof-thumb{display:block;width:96px;height:96px;object-fit:cover;border-radius:8px;border:1px solid #eee;margin-top:8px}
+.top .top-title{display:flex;align-items:center;justify-content:center;gap:clamp(10px,4vw,24px);padding-left:0;text-align:left}.top .top-title h1{flex:none}.top .top-title span{font-size:clamp(11px,3.1vw,14px);font-weight:600;white-space:nowrap}
