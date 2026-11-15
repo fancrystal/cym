@@ -4,7 +4,7 @@ import { categoryOptions, filterProducts } from '../../shared/categories.js'
 
 test('常用分类始终可选，保留并去重已有自定义分类', () => {
   const options = categoryOptions([{category:'生活用品'}, {category:'茶叶'}, {category:'茶叶'}, {category:''}])
-  for (const name of ['生活用品','保健食品','水果','蔬菜','衣服','家电','茶叶','未分类']) assert.ok(options.includes(name))
+  for (const name of ['内蒙专购','生活用品','保健食品','水果','蔬菜','衣服','家电','茶叶','未分类']) assert.ok(options.includes(name))
   assert.equal(options.filter(name => name === '生活用品').length, 1)
   assert.equal(options.filter(name => name === '茶叶').length, 1)
 })
