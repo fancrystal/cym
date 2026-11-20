@@ -147,3 +147,14 @@ CREATE TABLE IF NOT EXISTS topups (
   FOREIGN KEY (admin_id) REFERENCES admins(id),
   FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS support_messages (
+ id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+ user_id BIGINT UNSIGNED NOT NULL,
+ sender ENUM('user','admin') NOT NULL,
+ content VARCHAR(1000) NOT NULL,
+ is_read BOOLEAN NOT NULL DEFAULT FALSE,
+ created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+ INDEX idx_support_user (user_id, id),
+ FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB;

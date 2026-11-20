@@ -41,6 +41,14 @@ export function routes(db, secret, uploadDir) {
   }
   const user = authorize('user'), admin = authorize('admin')
   const userOrAdmin = (req,res,next) => { try { const id=jwt.verify((req.headers.authorization||'').replace(/^Bearer\s+/i,''),secret); if(!['user','admin'].includes(id.role))throw fail('无权限',403); return authorize(id.role)(req,res,next) } catch(e){return next(e.status?e:fail('请先登录',401))} }
+  const supportContent = value => { if (typeof value !== 'string' || !value.trim() || value.trim().length > 1000) throw fail('留言内容需为 1 至 1000 字'); return value.trim() }
+  r.get('/support/unread-count', user, wrap(async (req,res) => { const [[row]]=await db.query("SELECT COUNT(*) count FROM support_messages WHERE user_id=? AND sender='admin' AND is_read=0",[req.identity.id]); res.json({data:{count:Number(row.count)}}) }))
+  r.get('/support/messages', user, wrap(async (req,res) => { const [data]=await db.query('SELECT id,sender,content,created_at FROM support_messages WHERE user_id=? ORDER BY id DESC LIMIT 500',[req.identity.id]); res.json({data:data.reverse()}) }))
+  r.put('/support/read', user, wrap(async (req,res) => { const id=Number(req.body.last_id); if(!Number.isSafeInteger(id)||id<1) throw fail('消息编号无效'); await db.query("UPDATE support_messages SET is_read=1 WHERE user_id=? AND sender='admin' AND id<=?",[req.identity.id,id]); res.json({ok:true}) }))
+  r.post('/support/messages', user, wrap(async (req,res) => { await db.query("INSERT INTO support_messages (user_id,sender,content) VALUES (?,'user',?)",[req.identity.id,supportContent(req.body.content)]); res.json({ok:true}) }))
+  r.get('/admin/support', admin, wrap(async (_req,res) => { const [data]=await db.query("SELECT u.id,u.username,u.phone,MAX(m.id) last_id, SUM(m.sender='user' AND m.id > COALESCE((SELECT MAX(r.id) FROM support_messages r WHERE r.user_id=u.id AND r.sender='admin'),0)) pending FROM users u JOIN support_messages m ON m.user_id=u.id GROUP BY u.id,u.username,u.phone ORDER BY last_id DESC LIMIT 500"); res.json({data}) }))
+  r.get('/admin/support/:id', admin, wrap(async (req,res) => { const [data]=await db.query('SELECT id,sender,content,created_at FROM support_messages WHERE user_id=? ORDER BY id DESC LIMIT 500',[req.params.id]); res.json({data:data.reverse()}) }))
+  r.post('/admin/support/:id', admin, wrap(async (req,res) => { const content=supportContent(req.body.content); const [[row]]=await db.query('SELECT id FROM users WHERE id=?',[req.params.id]); if(!row) throw fail('用户不存在',404); await db.query("INSERT INTO support_messages (user_id,sender,content) VALUES (?,'admin',?)",[row.id,content]); res.json({ok:true}) }))
   r.post('/admin/uploads', admin, express.raw({ type: ['image/jpeg','image/png','image/webp','image/gif'], limit: '5mb' }), wrap(async (req, res) => {
     const b = req.body
     if (!Buffer.isBuffer(b) || !b.length) throw fail('请选择 JPG、PNG、GIF 或 WebP 图片')
@@ -214,9 +222,10 @@ export function routes(db, secret, uploadDir) {
       const options = typeof product.options === 'string' ? JSON.parse(product.options) : (product.options || [])
       const option = options.find(x => x.id === req.body.variant); if (options.length && !option) throw fail('请选择商品款式')
       const [[root]] = await c.query("SELECT id FROM users WHERE is_root = 1 AND status = 'active' LIMIT 1 FOR UPDATE"); if (!root) throw fail('系统根账户未配置')
-      const sequence = buyer.purchase_count + 1
-      const recipient = await resolveRewardRecipient({ buyerId: buyer.id, sequence, rootUserId: root.id, getParentId: async id => { const [[row]] = await c.query('SELECT parent_id FROM users WHERE id = ?', [id]); return row?.parent_id }, getPurchaseCount: async id => { const [[row]] = await c.query('SELECT purchase_count FROM users WHERE id = ? FOR UPDATE', [id]); return row?.purchase_count || 0 } })
-      await c.query('UPDATE users SET balance = balance - ?, purchase_count = purchase_count + 1 WHERE id = ?', [product.cost, buyer.id]); await c.query('UPDATE users SET balance = balance + ? WHERE id = ?', [product.reward, recipient.recipientId]); await c.query('UPDATE products SET stock = stock - 1 WHERE id = ?', [product.id])
+      const countsPurchase = toCents(product.reward) > 0
+      const sequence = countsPurchase ? buyer.purchase_count + 1 : 0
+      const recipient = countsPurchase ? await resolveRewardRecipient({ buyerId: buyer.id, sequence, rootUserId: root.id, getParentId: async id => { const [[row]] = await c.query('SELECT parent_id FROM users WHERE id = ?', [id]); return row?.parent_id }, getPurchaseCount: async id => { const [[row]] = await c.query('SELECT purchase_count FROM users WHERE id = ? FOR UPDATE', [id]); return row?.purchase_count || 0 } }) : { recipientId: root.id, destination: 'root' }
+      await c.query('UPDATE users SET balance = balance - ?, purchase_count = purchase_count + ? WHERE id = ?', [product.cost, countsPurchase ? 1 : 0, buyer.id]); await c.query('UPDATE users SET balance = balance + ? WHERE id = ?', [product.reward, recipient.recipientId]); await c.query('UPDATE products SET stock = stock - 1 WHERE id = ?', [product.id])
       const orderNo = `TR${Date.now()}${crypto.randomBytes(5).toString('hex').toUpperCase()}`
       const [order] = await c.query('INSERT INTO orders (order_no,user_id,product_id,request_id,request_fingerprint,product_name,variant,address,cost,reward,purchase_sequence,recipient_id,reward_destination) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [orderNo, buyer.id, product.id, rid, fp, product.name, option?.label || null, JSON.stringify(address), product.cost, product.reward, sequence, recipient.recipientId, recipient.destination])
       await c.query("INSERT INTO coupon_transactions (user_id,type,amount,description,order_id) VALUES (?, 'purchase', -?, ?, ?), (?, 'reward', ?, ?, ?)", [buyer.id, product.cost, `购买 ${product.name}`, order.insertId, recipient.recipientId, product.reward, `商圈收益 ${product.name}`, order.insertId])
@@ -225,8 +234,9 @@ export function routes(db, secret, uploadDir) {
   }))
   r.get('/admin/users', admin, wrap(async (req, res) => { const q = String(req.query.q || '').trim().slice(0, 100); const pattern = `%${q}%`; const [data] = await db.query('SELECT id,phone,username,invite_code,parent_id,is_root,status,balance,purchase_count,created_at FROM users WHERE (? = ? OR username LIKE ? OR phone LIKE ? OR CAST(id AS CHAR) = ?) ORDER BY id DESC LIMIT 500', [q,'',pattern,pattern,q]); res.json({ data }) }))
   r.post('/admin/users', admin, wrap(async (req, res) => {
-    const {phone,username,password}=req.body, parentPhone=String(req.body.parent_phone || '').trim()
-    if (!phoneValid(phone) || typeof username !== 'string' || !/^[\w\u4e00-\u9fa5]{1,20}$/.test(username) || typeof password !== 'string' || password.length < 6 || password.length > 64) throw fail('请填写有效的手机号、用户名和至少 6 位密码')
+    const {phone,password}=req.body, parentPhone=String(req.body.parent_phone || '').trim()
+    if (!phoneValid(phone) || typeof password !== 'string' || password.length < 6 || password.length > 64) throw fail('请填写有效的手机号和 6 至 64 位密码')
+    const username='cym'+phone
     if (parentPhone && !phoneValid(parentPhone)) throw fail('上级手机号无效')
     let cents; try { cents=toCents(req.body.balance ?? '0') } catch { throw fail('初始产品券金额无效') }
     if (cents > 999999999999) throw fail('初始产品券金额超出范围')
@@ -241,6 +251,7 @@ export function routes(db, secret, uploadDir) {
     res.json({data})
   }))
   r.get('/admin/users/:id/transactions', admin, wrap(async (req, res) => { const [data] = await db.query('SELECT id,type,amount,description,order_id,created_at FROM coupon_transactions WHERE user_id=? ORDER BY id DESC LIMIT 500', [req.params.id]); res.json({ data }) }))
+  r.put('/admin/users/:id/password', admin, wrap(async (req,res) => { const password=req.body.password; if(typeof password!=='string'||password.length<6||password.length>64)throw fail('密码长度为 6 至 64 位'); const [result]=await db.query('UPDATE users SET password_hash=? WHERE id=?',[await bcrypt.hash(password,10),req.params.id]); if(!result.affectedRows)throw fail('用户不存在',404); res.json({ok:true}) }))
   r.put('/admin/users/:id/status', admin, wrap(async (req, res) => { if (!['active','disabled'].includes(req.body.status)) throw fail('状态无效'); const [result] = await db.query('UPDATE users SET status=? WHERE id=? AND is_root=0', [req.body.status,req.params.id]); if (!result.affectedRows) throw fail('用户不存在或为根账户'); res.json({ ok: true }) }))
   r.post('/admin/users/:id/topup', admin, wrap(async (req, res) => {
     const amount = fromCents(toCents(req.body.amount)), rid = requestId(req.body.request_id), fp = fingerprint([String(req.params.id), amount]); if (toCents(amount) < 1) throw fail('充值金额必须大于零')
