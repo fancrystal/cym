@@ -51,6 +51,10 @@ corepack pnpm --filter @cym/admin build
 
 ## 部署规划
 
+Windows 本机可双击项目根目录的 `deploy.bat`：脚本检查 `main` 分支和 SSH，运行常规测试及前后台构建，提交项目文件并推送 GitHub，然后上传构建产物及后端源码，切换服务器版本并检查服务；服务启动或健康检查失败时回滚。需要本机已配置 Git 提交身份、GitHub 与服务器 SSH。关闭窗口前留意结果；若推送后发布失败，GitHub 不会自动回退。常规测试可能跳过 MySQL 集成测试，涉及账目时需先按下方说明对本地测试库单独验证。
+
+脚本不自动迁移数据库、安装线上依赖、更新 Nginx 或发布安卓安装包；检测到相应受控文件相对 GitHub 发生变更时会停止，须先单独处理。请勿把敏感信息写进源码；`.env`、私钥和签名文件不会随常规构建发布。自动部署保留生产数据库和上传文件。
+
 H5 使用 `cym.green`，后台使用 `admin.cym.green`，分别由独立 Nginx 站点提供静态文件并同源代理 `/api`。API 使用 `deploy/cym-backend.service`；Nginx 参考 `deploy/cym-web.nginx.conf` 和 `deploy/cym-admin.nginx.conf`，证书申请前使用对应的 ACME 临时配置。服务器目录为 `/srv/cym`，独立数据库为 `cym_db`，仅监听本机 3100 端口，敏感环境变量保存在 `/srv/cym/shared/backend.env`。执行前检查域名、端口、已有站点及数据库名称并备份 Nginx 配置；不要导入本地机器人数据。详细范围见 [设计方案](docs/superpowers/specs/2026-11-07-local-commerce-design.md)。
 
 后台用户和订单支持关键词查询，最多显示匹配结果中最近 500 条；用户流水最多显示最近 500 条。运营概览按完整订单数据统计近 30 天成交和商品排行。

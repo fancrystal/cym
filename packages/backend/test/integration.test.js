@@ -140,6 +140,13 @@ test('后台创建独立普通用户或指定上级，并原子记录初始产�
   const [[ledger]]=await db.query("SELECT amount FROM coupon_transactions WHERE user_id=? AND type='topup'",[ids[1]]); assert.equal(ledger.amount,'25.50')
   const base=`http://127.0.0.1:${server.address().port}/api`, userToken=jwt.sign({id:ids[1],role:'user'},process.env.JWT_SECRET)
   const put=(path,auth,body)=>fetch(base+path,{method:'PUT',headers:{'content-type':'application/json',authorization:`Bearer ${auth}`},body:JSON.stringify(body)})
+  const countPath=`/admin/users/${ids[1]}/purchase-count`
+  assert.equal((await put(countPath,userToken,{purchase_count:5})).status,403)
+  for(const value of [-1,1.5,'',4294967296]) assert.equal((await put(countPath,token,{purchase_count:value})).status,400)
+  assert.equal((await put(countPath,token,{purchase_count:7})).status,200)
+  assert.equal((await put(countPath,token,{purchase_count:7})).status,200)
+  const [[countUser]]=await db.query('SELECT purchase_count FROM users WHERE id=?',[ids[1]]);assert.equal(countUser.purchase_count,7)
+  assert.equal((await put('/admin/users/999999999/purchase-count',token,{purchase_count:2})).status,404)
   assert.equal((await put(`/admin/users/${ids[1]}/password`,userToken,{password:'newpass'})).status,403)
   assert.equal((await put(`/admin/users/${ids[1]}/password`,token,{password:'x'})).status,400)
   assert.equal((await put(`/admin/users/${ids[1]}/password`,token,{password:'newpass'})).status,200)
